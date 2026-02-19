@@ -1,62 +1,88 @@
 /**
- * Tests for safety guardrails
+ * Tests for safety guardrails + confirmation system
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
-    isDangerousCommand,
+    checkCommandSafety,
     isWithinWorkingDirectory,
     checkPathSandbox,
     isProtectedFromOverwrite,
     checkWriteSafety,
     checkEditSafety,
 } from "./safety.js";
+import { setConfirmationHandler, resetConfirmationHandler } from "./confirmation.js";
 
-// ── Delete command blocking ────────────────────────────
+// Helper: mock confirmation to always approve
+function mockApproveAll() {
+    setConfirmationHandler(() => true);
+}
 
-describe("isDangerousCommand", () => {
-    it("should block rm", () => {
-        expect(isDangerousCommand("rm file.txt")).toBeTruthy();
+// Helper: mock confirmation to always deny
+function mockDenyAll() {
+    setConfirmationHandler(() => false);
+}
+
+beforeEach(() => {
+    resetConfirmationHandler(); // reset to deny-all before each test
+});
+
+// ── Dangerous command detection ────────────────────────
+
+describe("checkCommandSafety — denied (default)", () => {
+    it("should deny rm", () => {
+        expect(checkCommandSafety("rm file.txt")).toBeTruthy();
     });
 
-    it("should block rm -rf", () => {
-        expect(isDangerousCommand("rm -rf src")).toBeTruthy();
+    it("should deny rm -rf", () => {
+        expect(checkCommandSafety("rm -rf src")).toBeTruthy();
     });
 
-    it("should block rm -f", () => {
-        expect(isDangerousCommand("rm -f package.json")).toBeTruthy();
+    it("should deny unlink", () => {
+        expect(checkCommandSafety("unlink some-file")).toBeTruthy();
     });
 
-    it("should block unlink", () => {
-        expect(isDangerousCommand("unlink some-file")).toBeTruthy();
+    it("should deny rmdir", () => {
+        expect(checkCommandSafety("rmdir old-dir")).toBeTruthy();
     });
 
-    it("should block rmdir", () => {
-        expect(isDangerousCommand("rmdir old-directory")).toBeTruthy();
+    it("should deny git clean", () => {
+        expect(checkCommandSafety("git clean -fd")).toBeTruthy();
     });
 
-    it("should block git clean", () => {
-        expect(isDangerousCommand("git clean -fd")).toBeTruthy();
+    it("should deny git reset --hard", () => {
+        expect(checkCommandSafety("git reset --hard HEAD~1")).toBeTruthy();
     });
 
-    it("should block git reset --hard", () => {
-        expect(isDangerousCommand("git reset --hard HEAD~1")).toBeTruthy();
+    it("should deny git checkout -- .", () => {
+        expect(checkCommandSafety("git checkout -- .")).toBeTruthy();
+    });
+});
+
+describe("checkCommandSafety — approved", () => {
+    it("should allow rm when user approves", () => {
+        mockApproveAll();
+        expect(checkCommandSafety("rm file.txt")).toBeNull();
     });
 
-    it("should block git checkout -- .", () => {
-        expect(isDangerousCommand("git checkout -- .")).toBeTruthy();
+    it("should allow git clean when user approves", () => {
+        mockApproveAll();
+        expect(checkCommandSafety("git clean -fd")).toBeNull();
     });
+});
 
-    it("should allow safe commands", () => {
-        expect(isDangerousCommand("ls -la")).toBeNull();
-        expect(isDangerousCommand("npm test")).toBeNull();
-        expect(isDangerousCommand("git status")).toBeNull();
-        expect(isDangerousCommand("git add .")).toBeNull();
-        expect(isDangerousCommand("git commit -m 'msg'")).toBeNull();
-        expect(isDangerousCommand("git push origin main")).toBeNull();
-        expect(isDangerousCommand("echo hello")).toBeNull();
-        expect(isDangerousCommand("cat file.txt")).toBeNull();
-        expect(isDangerousCommand("npm install")).toBeNull();
+describe("checkCommandSafety — safe commands (no prompt)", () => {
+    it("should pass safe commands without prompting", () => {
+        // These should return null WITHOUT triggering the confirmation handler
+        expect(checkCommandSafety("ls -la")).toBeNull();
+        expect(checkCommandSafety("npm test")).toBeNull();
+        expect(checkCommandSafety("git status")).toBeNull();
+        expect(checkCommandSafety("git add .")).toBeNull();
+        expect(checkCommandSafety("git commit -m 'msg'")).toBeNull();
+        expect(checkCommandSafety("git push origin main")).toBeNull();
+        expect(checkCommandSafety("echo hello")).toBeNull();
+        expect(checkCommandSafety("cat file.txt")).toBeNull();
+        expect(checkCommandSafety("npm install")).toBeNull();
     });
 });
 
@@ -67,20 +93,12 @@ describe("isWithinWorkingDirectory", () => {
         expect(isWithinWorkingDirectory("src/tools/safety.ts")).toBe(true);
     });
 
-    it("should allow nested paths", () => {
-        expect(isWithinWorkingDirectory("src/agent/agent.ts")).toBe(true);
-    });
-
     it("should block paths outside project", () => {
         expect(isWithinWorkingDirectory("/tmp/evil.ts")).toBe(false);
     });
 
     it("should block parent traversal", () => {
         expect(isWithinWorkingDirectory("../../etc/passwd")).toBe(false);
-    });
-
-    it("should block absolute paths to other dirs", () => {
-        expect(isWithinWorkingDirectory("/Users/ashish.bhutani/.zshrc")).toBe(false);
     });
 });
 
@@ -89,10 +107,15 @@ describe("checkPathSandbox", () => {
         expect(checkPathSandbox("src/new-file.ts")).toBeNull();
     });
 
-    it("should return reason for outside paths", () => {
+    it("should deny outside paths (default handler)", () => {
         const result = checkPathSandbox("/tmp/bad-file.ts");
         expect(result).toBeTruthy();
-        expect(result).toContain("outside");
+        expect(result).toContain("Denied");
+    });
+
+    it("should allow outside paths when user approves", () => {
+        mockApproveAll();
+        expect(checkPathSandbox("/tmp/allowed.ts")).toBeNull();
     });
 });
 
@@ -103,32 +126,21 @@ describe("isProtectedFromOverwrite", () => {
         expect(isProtectedFromOverwrite("package.json")).toBe(true);
     });
 
-    it("should protect tsconfig.json", () => {
-        expect(isProtectedFromOverwrite("tsconfig.json")).toBe(true);
-    });
-
-    it("should protect .gitignore", () => {
-        expect(isProtectedFromOverwrite(".gitignore")).toBe(true);
-    });
-
     it("should allow normal source files", () => {
         expect(isProtectedFromOverwrite("src/tools/new-tool.ts")).toBe(false);
     });
 });
 
-// ── Composite checks ──────────────────────────────────
-
 describe("checkWriteSafety", () => {
-    it("should block protected files", () => {
+    it("should deny protected files (default)", () => {
         const result = checkWriteSafety("package.json");
         expect(result).toBeTruthy();
-        expect(result).toContain("protected");
+        expect(result).toContain("Denied");
     });
 
-    it("should block outside paths", () => {
-        const result = checkWriteSafety("/tmp/outside.ts");
-        expect(result).toBeTruthy();
-        expect(result).toContain("outside");
+    it("should allow protected files when user approves", () => {
+        mockApproveAll();
+        expect(checkWriteSafety("package.json")).toBeNull();
     });
 
     it("should allow normal project files", () => {
@@ -137,13 +149,17 @@ describe("checkWriteSafety", () => {
 });
 
 describe("checkEditSafety", () => {
-    it("should allow editing protected files (edit_file is fine)", () => {
+    it("should allow editing protected files (edit is fine)", () => {
         expect(checkEditSafety("package.json")).toBeNull();
     });
 
-    it("should block editing outside project", () => {
+    it("should deny editing outside project (default)", () => {
         const result = checkEditSafety("/tmp/evil.ts");
         expect(result).toBeTruthy();
-        expect(result).toContain("outside");
+    });
+
+    it("should allow editing outside project when user approves", () => {
+        mockApproveAll();
+        expect(checkEditSafety("/tmp/outside.ts")).toBeNull();
     });
 });

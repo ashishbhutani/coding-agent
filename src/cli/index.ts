@@ -13,9 +13,25 @@ import readlineSync from "readline-sync";
 import { Agent } from "../agent/agent.js";
 import { createToolRegistry } from "../tools/index.js";
 import { createProvider } from "../llm/index.js";
+import { setConfirmationHandler } from "../tools/confirmation.js";
 
 // Load environment variables
 config();
+
+// Register CLI confirmation handler — prompts the user for dangerous operations
+setConfirmationHandler((prompt: string): boolean => {
+    console.log(chalk.yellow(`\n${prompt}`));
+    const answer = readlineSync.question(
+        chalk.bold.yellow("   Allow? [y/N] ")
+    );
+    const approved = answer.trim().toLowerCase() === "y";
+    if (approved) {
+        console.log(chalk.green("   ✅ Approved by user."));
+    } else {
+        console.log(chalk.red("   ❌ Denied by user."));
+    }
+    return approved;
+});
 
 function printBanner(): void {
     console.log(

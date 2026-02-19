@@ -2,92 +2,94 @@
  * Safety Guardrails
  *
  * Two core rules:
- * 1. NO DELETIONS — any rm, unlink, rmdir, or destructive command is blocked.
- * 2. DIRECTORY SANDBOX — all file writes/edits must stay within the agent's
- *    working directory. No touching files outside the project.
+ * 1. DELETIONS require confirmation — any rm, unlink, rmdir, or destructive command asks the user.
+ * 2. DIRECTORY SANDBOX — all file writes/edits must stay within the agent's working directory.
+ *    Attempting to go outside asks the user for confirmation.
+ *
+ * Protected config files (package.json, etc.) require confirmation for write_file overwrite.
  */
 
 import { resolve, relative } from "node:path";
 import { cwd } from "node:process";
+import { requestConfirmation } from "./confirmation.js";
 
-// ── Rule 1: Block all delete operations ────────────────────
+// ── Dangerous command patterns ─────────────────────────
 
-/**
- * Command patterns that perform deletion or destructive operations.
- */
-const DELETE_COMMAND_PATTERNS = [
-    /\brm\b/,                     // rm in any form
-    /\bunlink\b/,                  // unlink
-    /\brmdir\b/,                   // rmdir
-    /\bshred\b/,                   // shred (secure delete)
-    />\s*\/dev\/null/,             // redirect to /dev/null (data loss)
-    />\s+\S+\.ts\b/,              // redirect overwrite .ts files
-    />\s+\S+\.json\b/,            // redirect overwrite .json files
-    /\btruncate\b/,                // truncate files
-    /\bgit\s+clean\b/,            // git clean (removes untracked files)
-    /\bgit\s+checkout\s+--\s+\./,  // git checkout -- . (discards all changes)
-    /\bgit\s+reset\s+--hard\b/,   // git reset --hard (discards commits + changes)
+const DELETE_COMMAND_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /\brm\b/, label: "rm (delete files)" },
+    { pattern: /\bunlink\b/, label: "unlink (delete file)" },
+    { pattern: /\brmdir\b/, label: "rmdir (delete directory)" },
+    { pattern: /\bshred\b/, label: "shred (secure delete)" },
+    { pattern: />\s*\/dev\/null/, label: "redirect to /dev/null" },
+    { pattern: />\s+\S+\.ts\b/, label: "overwrite .ts file via redirect" },
+    { pattern: />\s+\S+\.json\b/, label: "overwrite .json file via redirect" },
+    { pattern: /\btruncate\b/, label: "truncate (empty file)" },
+    { pattern: /\bgit\s+clean\b/, label: "git clean (remove untracked files)" },
+    { pattern: /\bgit\s+checkout\s+--\s+\./, label: "git checkout -- . (discard all changes)" },
+    { pattern: /\bgit\s+reset\s+--hard\b/, label: "git reset --hard (discard commits)" },
 ];
 
 /**
- * Check if a command performs any deletion or destructive operation.
- * Returns a reason string if blocked, null if safe.
+ * Check if a command is dangerous and request user confirmation.
+ * Returns null if safe or approved, error string if denied.
  */
-export function isDangerousCommand(command: string): string | null {
-    for (const pattern of DELETE_COMMAND_PATTERNS) {
+export function checkCommandSafety(command: string): string | null {
+    for (const { pattern, label } of DELETE_COMMAND_PATTERNS) {
         if (pattern.test(command)) {
+            const approved = requestConfirmation(
+                `⚠️  The agent wants to run a destructive command:\n` +
+                `   Command: ${command}\n` +
+                `   Reason:  ${label}\n`
+            );
+
+            if (approved) return null; // user said yes
+
             return (
-                `Blocked: "${command}" contains a destructive operation (matched: ${pattern}).\n` +
-                `The agent is not allowed to delete files or run destructive commands.\n` +
-                `If you need to delete something, ask the user to do it manually.`
+                `Denied by user: "${command}" was flagged as destructive (${label}).\n` +
+                `Ask the user to perform this action manually if needed.`
             );
         }
     }
-    return null;
+    return null; // safe command, no confirmation needed
 }
 
-// ── Rule 2: Directory sandboxing ───────────────────────────
+// ── Directory sandboxing ───────────────────────────────
 
-/** Cache the working directory at module load time. */
 const PROJECT_ROOT = cwd();
 
 /**
- * Check if a file path is within the agent's working directory.
- * Returns true if the path is safe (inside project), false if outside.
+ * Check if a path is within the project directory.
  */
 export function isWithinWorkingDirectory(filePath: string): boolean {
     const absPath = resolve(filePath);
     const relPath = relative(PROJECT_ROOT, absPath);
-
-    // If relative path starts with "..", it's outside the project
-    if (relPath.startsWith("..") || relPath.startsWith("/")) {
-        return false;
-    }
-
-    return true;
+    return !relPath.startsWith("..") && !relPath.startsWith("/");
 }
 
 /**
- * Check if a file path is outside the sandbox.
- * Returns a reason string if blocked, null if allowed.
+ * Check sandbox for a file path, requesting confirmation if outside project.
+ * Returns null if safe/approved, error string if denied.
  */
 export function checkPathSandbox(filePath: string): string | null {
-    if (!isWithinWorkingDirectory(filePath)) {
-        const absPath = resolve(filePath);
-        return (
-            `Blocked: "${absPath}" is outside the project directory (${PROJECT_ROOT}).\n` +
-            `The agent can only create, modify, or delete files within the project.`
-        );
-    }
-    return null;
+    if (isWithinWorkingDirectory(filePath)) return null;
+
+    const absPath = resolve(filePath);
+    const approved = requestConfirmation(
+        `⚠️  The agent wants to access a file outside the project:\n` +
+        `   Path:    ${absPath}\n` +
+        `   Project: ${PROJECT_ROOT}\n`
+    );
+
+    if (approved) return null;
+
+    return (
+        `Denied by user: "${absPath}" is outside the project directory (${PROJECT_ROOT}).\n` +
+        `The agent can only access files within the project unless you approve.`
+    );
 }
 
-// ── Protected config files ─────────────────────────────────
+// ── Protected config files ─────────────────────────────
 
-/**
- * Paths relative to project root that write_file must NOT overwrite.
- * edit_file is still allowed for these (surgical edits are fine).
- */
 const PROTECTED_WRITE_TARGETS = [
     "package.json",
     "package-lock.json",
@@ -99,31 +101,37 @@ const PROTECTED_WRITE_TARGETS = [
 ];
 
 /**
- * Check if a file path is a protected config file that write_file should not overwrite.
- * edit_file can still modify these files surgically.
+ * Check if a file is protected from full overwrite via write_file.
  */
 export function isProtectedFromOverwrite(filePath: string): boolean {
     const absPath = resolve(filePath);
     const relPath = relative(PROJECT_ROOT, absPath);
-
-    return PROTECTED_WRITE_TARGETS.some((pattern) => relPath === pattern);
+    return PROTECTED_WRITE_TARGETS.some((p) => relPath === p);
 }
 
 /**
- * Full safety check for file write operations (write_file).
- * Returns a reason string if blocked, null if allowed.
+ * Full safety check for write_file operations.
+ * Checks sandbox + protected file, requesting confirmation as needed.
  */
 export function checkWriteSafety(filePath: string): string | null {
-    // Check sandbox first
+    // Sandbox check (with confirmation)
     const sandboxIssue = checkPathSandbox(filePath);
     if (sandboxIssue) return sandboxIssue;
 
-    // Check protected files
+    // Protected file check (with confirmation)
     if (isProtectedFromOverwrite(filePath)) {
         const absPath = resolve(filePath);
+        const approved = requestConfirmation(
+            `⚠️  The agent wants to OVERWRITE a protected config file:\n` +
+            `   File: ${absPath}\n` +
+            `   Tip:  edit_file is usually safer for config changes.\n`
+        );
+
+        if (approved) return null;
+
         return (
-            `Blocked: "${absPath}" is a protected config file.\n` +
-            `Use edit_file to make surgical changes instead of overwriting.`
+            `Denied by user: "${absPath}" is a protected config file.\n` +
+            `Use edit_file for surgical changes, or approve the overwrite.`
         );
     }
 
@@ -131,9 +139,8 @@ export function checkWriteSafety(filePath: string): string | null {
 }
 
 /**
- * Full safety check for file edit operations (edit_file, insert_lines, delete_lines).
+ * Full safety check for edit operations (edit_file, insert_lines, delete_lines).
  * Only checks sandbox — editing protected files is allowed.
- * Returns a reason string if blocked, null if allowed.
  */
 export function checkEditSafety(filePath: string): string | null {
     return checkPathSandbox(filePath);

@@ -8,7 +8,7 @@
 import { exec } from "node:child_process";
 import { resolve } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
-import { isDangerousCommand } from "./safety.js";
+import { checkCommandSafety } from "./safety.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 const MAX_OUTPUT_LENGTH = 50_000; // 50KB output cap
@@ -19,7 +19,7 @@ export const runCommandTool: Tool = {
         description:
             "Execute a shell command and return the output (stdout and stderr). " +
             "Has a 30-second timeout by default. Use for running tests, builds, git commands, etc. " +
-            "Be cautious with destructive commands.",
+            "Destructive commands (rm, unlink, etc.) will require user confirmation.",
         parameters: {
             type: "object",
             properties: {
@@ -46,10 +46,10 @@ export const runCommandTool: Tool = {
         const cwd = resolve(String(args.cwd || "."));
         const timeout = Number(args.timeout_ms || DEFAULT_TIMEOUT_MS);
 
-        // Safety: block dangerous commands
-        const danger = isDangerousCommand(command);
-        if (danger) {
-            return { output: danger, isError: true };
+        // Safety: check for dangerous commands (asks user for confirmation)
+        const denied = checkCommandSafety(command);
+        if (denied) {
+            return { output: denied, isError: true };
         }
 
         return new Promise((resolvePromise) => {
