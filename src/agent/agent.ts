@@ -7,6 +7,11 @@
  * 3. Executes any tool calls the LLM makes
  * 4. Feeds results back to the LLM
  * 5. Repeats until the LLM responds with text (no more tool calls)
+ *
+ * Safety features:
+ * - Repetition detection: stops if the same tool+args are called consecutively
+ * - Max tool rounds: hard cap on consecutive tool-calling rounds
+ * - Token optimization: prevents history bloat from repeated results
  */
 
 import type { LLMProvider, LLMMessage, ToolResult } from "../llm/provider.js";
@@ -17,12 +22,19 @@ import chalk from "chalk";
 export interface AgentConfig {
     maxToolRounds: number; // Max consecutive tool-calling rounds
     verbose: boolean; // Print tool calls and results
+    maxRepetitions: number; // Max identical consecutive tool calls before stopping
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
     maxToolRounds: 25,
     verbose: true,
+    maxRepetitions: 2,
 };
+
+/** Fingerprint a tool call for repetition detection. */
+function toolCallFingerprint(name: string, args: Record<string, unknown>): string {
+    return `${name}::${JSON.stringify(args, Object.keys(args).sort())}`;
+}
 
 export class Agent {
     private provider: LLMProvider;
@@ -55,6 +67,10 @@ export class Agent {
 
         let toolRound = 0;
 
+        // Repetition tracking: fingerprints of recent consecutive calls
+        let lastFingerprint = "";
+        let repetitionCount = 0;
+
         while (toolRound < this.config.maxToolRounds) {
             // Send conversation to LLM
             const response = await this.provider.chat(
@@ -78,6 +94,51 @@ export class Agent {
                 response.toolCalls.length > 0
             ) {
                 toolRound++;
+
+                // ── Repetition detection ──
+                // Build a combined fingerprint for all tool calls in this round
+                const roundFingerprint = response.toolCalls
+                    .map((tc) => toolCallFingerprint(tc.name, tc.arguments))
+                    .join("|");
+
+                if (roundFingerprint === lastFingerprint) {
+                    repetitionCount++;
+
+                    if (repetitionCount >= this.config.maxRepetitions) {
+                        if (this.config.verbose) {
+                            console.log(
+                                chalk.yellow(
+                                    `\n  ⚠️  Repetition detected: same tool call made ${repetitionCount + 1} times in a row. Stopping.`
+                                )
+                            );
+                        }
+
+                        // Inject a system message to force the LLM to respond with text
+                        this.conversationHistory.push({
+                            role: "user",
+                            content:
+                                "[SYSTEM] You are repeating the same tool calls. The task appears to be complete. " +
+                                "Stop calling tools and provide your final response to the user summarizing what was accomplished.",
+                        });
+
+                        // One final LLM call to get a text response
+                        const finalResponse = await this.provider.chat(
+                            this.conversationHistory,
+                            [], // No tools — force text response
+                            this.systemPrompt
+                        );
+
+                        this.conversationHistory.push({
+                            role: "assistant",
+                            content: finalResponse.content,
+                        });
+
+                        return finalResponse.content;
+                    }
+                } else {
+                    lastFingerprint = roundFingerprint;
+                    repetitionCount = 0;
+                }
 
                 // Add assistant message with tool calls to history
                 this.conversationHistory.push({

@@ -8,9 +8,9 @@
 import { cwd } from "node:process";
 
 export function buildSystemPrompt(toolNames: string[]): string {
-    const workingDir = cwd();
+  const workingDir = cwd();
 
-    return `You are an expert coding agent. You help users with coding tasks by reading, writing, and modifying files, searching codebases, and executing commands.
+  return `You are an expert coding agent. You help users with coding tasks by reading, writing, and modifying files, searching codebases, and executing commands.
 
 ## Your Capabilities
 You have access to the following tools:
@@ -52,6 +52,12 @@ All relative paths are resolved relative to this directory.
 3. Make changes incrementally
 4. Verify your changes work (run tests, check compilation)
 5. Report results clearly
+
+### Task Completion
+- When the task is complete, STOP calling tools and respond with text summarizing what you did
+- NEVER repeat the same tool call with the same arguments — if a tool succeeded, move on
+- If a tool fails, try a DIFFERENT approach — do NOT retry the identical command
+- After writing a file and confirming it works, respond to the user — do NOT rewrite the same file
 
 You should be proactive — after making changes, verify they compile and tests pass.
 `;

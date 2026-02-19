@@ -129,17 +129,17 @@ describe("Agent", () => {
     });
 
     it("should stop after maxToolRounds", async () => {
-        // Provider always returns tool calls — agent should bail out
-        const provider = mockProvider(
-            Array(30).fill({
-                content: "",
-                toolCalls: [
-                    { name: "echo", arguments: { message: "loop" } },
-                ],
-                finishReason: "tool_calls",
-            })
-        );
+        // Provider returns tool calls with DIFFERENT args each time so repetition
+        // detector doesn't fire first — we want to test the round limit.
+        const responses = Array.from({ length: 30 }, (_, i) => ({
+            content: "",
+            toolCalls: [
+                { name: "echo", arguments: { message: `iteration-${i}` } },
+            ],
+            finishReason: "tool_calls" as const,
+        }));
 
+        const provider = mockProvider(responses);
         const tools = new ToolRegistry();
         tools.register(makeEchoTool());
 
@@ -150,6 +150,33 @@ describe("Agent", () => {
         const response = await agent.processMessage("Loop forever");
 
         expect(response).toContain("maximum tool rounds");
+    });
+
+    it("should detect repetition and stop early", async () => {
+        // Provider always returns the SAME tool call — repetition detector
+        // should stop after maxRepetitions (default: 2) identical consecutive rounds.
+        const provider = mockProvider(
+            Array(20).fill({
+                content: "",
+                toolCalls: [
+                    { name: "echo", arguments: { message: "same-every-time" } },
+                ],
+                finishReason: "tool_calls",
+            })
+        );
+
+        const tools = new ToolRegistry();
+        tools.register(makeEchoTool());
+
+        const agent = new Agent(provider, tools, {
+            verbose: false,
+            maxToolRounds: 25,
+        });
+        const response = await agent.processMessage("Do something");
+
+        // The agent should have stopped early (not hit maxToolRounds=25)
+        // and returned the mock's fallback response
+        expect(agent.getConversationLength()).toBeLessThan(25);
     });
 
     it("should track conversation length", async () => {
