@@ -9,7 +9,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
-import { isProtectedPath } from "./safety.js";
+import { checkWriteSafety } from "./safety.js";
 
 export const writeFileTool: Tool = {
     definition: {
@@ -17,13 +17,14 @@ export const writeFileTool: Tool = {
         description:
             "Write content to a file. Creates the file if it doesn't exist, " +
             "or overwrites it if it does. Parent directories are created automatically. " +
-            "NOTE: Cannot overwrite protected config files (package.json, tsconfig.json, etc.) — use edit_file instead.",
+            "NOTE: Cannot overwrite protected config files — use edit_file instead. " +
+            "Files must be within the project directory.",
         parameters: {
             type: "object",
             properties: {
                 path: {
                     type: "string",
-                    description: "Absolute or relative path to the file to write",
+                    description: "Absolute or relative path to the file to write (must be within project directory)",
                 },
                 content: {
                     type: "string",
@@ -38,12 +39,10 @@ export const writeFileTool: Tool = {
         const filePath = resolve(String(args.path));
         const content = String(args.content);
 
-        // Safety: block overwriting protected files
-        if (isProtectedPath(filePath)) {
-            return {
-                output: `Blocked: "${filePath}" is a protected project file. Use edit_file to make changes instead of overwriting.`,
-                isError: true,
-            };
+        // Safety: sandbox + protected file check
+        const blocked = checkWriteSafety(filePath);
+        if (blocked) {
+            return { output: blocked, isError: true };
         }
 
         try {

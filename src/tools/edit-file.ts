@@ -12,6 +12,7 @@
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
+import { checkEditSafety } from "./safety.js";
 
 export const editFileTool: Tool = {
     definition: {
@@ -57,6 +58,12 @@ export const editFileTool: Tool = {
         const oldText = args.old_text != null ? String(args.old_text) : undefined;
         const startLine = args.start_line != null ? Number(args.start_line) : undefined;
         const endLine = args.end_line != null ? Number(args.end_line) : undefined;
+
+        // Safety: sandbox check
+        const blocked = checkEditSafety(filePath);
+        if (blocked) {
+            return { output: blocked, isError: true };
+        }
 
         try {
             // Validate file exists and is a file

@@ -7,6 +7,7 @@
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
+import { checkEditSafety } from "./safety.js";
 
 export const deleteLinesTool: Tool = {
     definition: {
@@ -38,6 +39,12 @@ export const deleteLinesTool: Tool = {
         const filePath = resolve(String(args.path));
         const startLine = Number(args.start_line);
         const endLine = Number(args.end_line);
+
+        // Safety: sandbox check
+        const blocked = checkEditSafety(filePath);
+        if (blocked) {
+            return { output: blocked, isError: true };
+        }
 
         try {
             const fileStat = await stat(filePath);
