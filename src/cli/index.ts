@@ -11,6 +11,7 @@ import { config } from "dotenv";
 import chalk from "chalk";
 import readlineSync from "readline-sync";
 import { Agent } from "../agent/agent.js";
+import { Summarizer } from "../agent/summarizer.js";
 import { createToolRegistry } from "../tools/index.js";
 import { createProvider } from "../llm/index.js";
 import { setConfirmationHandler } from "../tools/confirmation.js";
@@ -94,7 +95,8 @@ async function main(): Promise<void> {
     const tools = createToolRegistry();
     let verbose = true;
 
-    const agent = new Agent(provider, tools, { verbose });
+    const summarizer = new Summarizer(apiKey);
+    const agent = new Agent(provider, tools, { verbose }, summarizer);
 
     console.log(
         chalk.green("  ✅ Agent ready. Type your request or /help for commands.\n")
