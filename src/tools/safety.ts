@@ -1,18 +1,94 @@
 /**
  * Safety Guardrails
  *
- * Prevents the agent from destroying its own source code,
- * deleting critical files, or running dangerous commands.
+ * Two core rules:
+ * 1. NO DELETIONS — any rm, unlink, rmdir, or destructive command is blocked.
+ * 2. DIRECTORY SANDBOX — all file writes/edits must stay within the agent's
+ *    working directory. No touching files outside the project.
  */
 
 import { resolve, relative } from "node:path";
 import { cwd } from "node:process";
 
+// ── Rule 1: Block all delete operations ────────────────────
+
 /**
- * Paths relative to project root that the agent must NEVER overwrite or delete.
- * The agent can still READ these files.
+ * Command patterns that perform deletion or destructive operations.
  */
-const PROTECTED_PATTERNS = [
+const DELETE_COMMAND_PATTERNS = [
+    /\brm\b/,                     // rm in any form
+    /\bunlink\b/,                  // unlink
+    /\brmdir\b/,                   // rmdir
+    /\bshred\b/,                   // shred (secure delete)
+    />\s*\/dev\/null/,             // redirect to /dev/null (data loss)
+    />\s+\S+\.ts\b/,              // redirect overwrite .ts files
+    />\s+\S+\.json\b/,            // redirect overwrite .json files
+    /\btruncate\b/,                // truncate files
+    /\bgit\s+clean\b/,            // git clean (removes untracked files)
+    /\bgit\s+checkout\s+--\s+\./,  // git checkout -- . (discards all changes)
+    /\bgit\s+reset\s+--hard\b/,   // git reset --hard (discards commits + changes)
+];
+
+/**
+ * Check if a command performs any deletion or destructive operation.
+ * Returns a reason string if blocked, null if safe.
+ */
+export function isDangerousCommand(command: string): string | null {
+    for (const pattern of DELETE_COMMAND_PATTERNS) {
+        if (pattern.test(command)) {
+            return (
+                `Blocked: "${command}" contains a destructive operation (matched: ${pattern}).\n` +
+                `The agent is not allowed to delete files or run destructive commands.\n` +
+                `If you need to delete something, ask the user to do it manually.`
+            );
+        }
+    }
+    return null;
+}
+
+// ── Rule 2: Directory sandboxing ───────────────────────────
+
+/** Cache the working directory at module load time. */
+const PROJECT_ROOT = cwd();
+
+/**
+ * Check if a file path is within the agent's working directory.
+ * Returns true if the path is safe (inside project), false if outside.
+ */
+export function isWithinWorkingDirectory(filePath: string): boolean {
+    const absPath = resolve(filePath);
+    const relPath = relative(PROJECT_ROOT, absPath);
+
+    // If relative path starts with "..", it's outside the project
+    if (relPath.startsWith("..") || relPath.startsWith("/")) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Check if a file path is outside the sandbox.
+ * Returns a reason string if blocked, null if allowed.
+ */
+export function checkPathSandbox(filePath: string): string | null {
+    if (!isWithinWorkingDirectory(filePath)) {
+        const absPath = resolve(filePath);
+        return (
+            `Blocked: "${absPath}" is outside the project directory (${PROJECT_ROOT}).\n` +
+            `The agent can only create, modify, or delete files within the project.`
+        );
+    }
+    return null;
+}
+
+// ── Protected config files ─────────────────────────────────
+
+/**
+ * Paths relative to project root that write_file must NOT overwrite.
+ * edit_file is still allowed for these (surgical edits are fine).
+ */
+const PROTECTED_WRITE_TARGETS = [
     "package.json",
     "package-lock.json",
     "tsconfig.json",
@@ -23,64 +99,42 @@ const PROTECTED_PATTERNS = [
 ];
 
 /**
- * Source directories the agent must not wipe entirely
- * (individual file edits within these are allowed).
+ * Check if a file path is a protected config file that write_file should not overwrite.
+ * edit_file can still modify these files surgically.
  */
-const PROTECTED_DIRS = [
-    "src/",
-    ".agent/",
-];
-
-/**
- * Commands or patterns that should be blocked entirely.
- */
-const DANGEROUS_COMMAND_PATTERNS = [
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|.*\s+).*src\b/,     // rm -rf src or similar
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|.*\s+).*package\.json/,
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|.*\s+).*node_modules\b/,
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|.*\s+)\.\s*$/,       // rm -rf .
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|.*\s+)\/\s*$/,       // rm -rf /
-    />\s*(package\.json|tsconfig\.json|\.gitignore)/,      // redirect overwrite critical files
-];
-
-/**
- * Check if a file path is a protected project file that should not be overwritten
- * by the agent using write_file (full overwrite). edit_file is still allowed.
- */
-export function isProtectedPath(filePath: string): boolean {
+export function isProtectedFromOverwrite(filePath: string): boolean {
     const absPath = resolve(filePath);
-    const relPath = relative(cwd(), absPath);
+    const relPath = relative(PROJECT_ROOT, absPath);
 
-    // Don't allow writing outside project root
-    if (relPath.startsWith("..")) {
-        return false; // allow writing outside project (e.g. /tmp)
-    }
-
-    return PROTECTED_PATTERNS.some((pattern) => relPath === pattern);
+    return PROTECTED_WRITE_TARGETS.some((pattern) => relPath === pattern);
 }
 
 /**
- * Check if a command is too dangerous to execute.
- * Returns a reason string if dangerous, null if safe.
+ * Full safety check for file write operations (write_file).
+ * Returns a reason string if blocked, null if allowed.
  */
-export function isDangerousCommand(command: string): string | null {
-    for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
-        if (pattern.test(command)) {
-            return `Blocked: "${command}" matches dangerous pattern ${pattern}. This could destroy critical project files.`;
-        }
+export function checkWriteSafety(filePath: string): string | null {
+    // Check sandbox first
+    const sandboxIssue = checkPathSandbox(filePath);
+    if (sandboxIssue) return sandboxIssue;
+
+    // Check protected files
+    if (isProtectedFromOverwrite(filePath)) {
+        const absPath = resolve(filePath);
+        return (
+            `Blocked: "${absPath}" is a protected config file.\n` +
+            `Use edit_file to make surgical changes instead of overwriting.`
+        );
     }
+
     return null;
 }
 
 /**
- * Check if a path would delete/overwrite an entire protected source directory.
- * Individual files within the directory are fine — only blocking wholesale deletion.
+ * Full safety check for file edit operations (edit_file, insert_lines, delete_lines).
+ * Only checks sandbox — editing protected files is allowed.
+ * Returns a reason string if blocked, null if allowed.
  */
-export function isProtectedDirectory(dirPath: string): boolean {
-    const absPath = resolve(dirPath);
-    const relPath = relative(cwd(), absPath);
-
-    return PROTECTED_DIRS.some(
-        (dir) => relPath === dir.replace(/\/$/, "") || relPath + "/" === dir
-    );
+export function checkEditSafety(filePath: string): string | null {
+    return checkPathSandbox(filePath);
 }
