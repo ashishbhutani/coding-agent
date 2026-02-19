@@ -1,0 +1,12 @@
+node_modules/
+node_modules_broken/
+dist/
+.env
+.env.local
+.env.*.local
+*.js.map
+*.d.ts
+!src/**/*.d.ts
+.DS_Store
+.agent/status/
+.env-weather-app

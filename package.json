@@ -1,0 +1,39 @@
+{
+  "name": "coding-agent",
+  "version": "0.1.0",
+  "description": "A self-improving coding agent with multi-agent orchestration",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "bin": {
+    "agent": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "TMPDIR=/tmp tsx src/cli/index.ts",
+    "verify": "TMPDIR=/tmp tsx src/cli/verify.ts",
+    "test": "TMPDIR=/tmp vitest run",
+    "test:watch": "TMPDIR=/tmp vitest",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "coding-agent",
+    "llm",
+    "ai",
+    "mcp"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@types/node": "^25.2.3",
+    "chalk": "^4.1.2",
+    "dotenv": "^17.3.1",
+    "readline-sync": "^1.4.10",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/readline-sync": "^1.4.8",
+    "tsx": "^4.21.0",
+    "vitest": "^3.2.4"
+  }
+}
