@@ -10,6 +10,9 @@ export type { Tool, ToolExecutionResult } from "./registry.js";
 import { ToolRegistry } from "./registry.js";
 import { readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
+import { editFileTool } from "./edit-file.js";
+import { insertLinesTool } from "./insert-lines.js";
+import { deleteLinesTool } from "./delete-lines.js";
 import { grepSearchTool } from "./grep-search.js";
 import { listDirTool } from "./list-dir.js";
 import { runCommandTool } from "./run-command.js";
@@ -22,9 +25,13 @@ export function createToolRegistry(): ToolRegistry {
 
     registry.register(readFileTool);
     registry.register(writeFileTool);
+    registry.register(editFileTool);
+    registry.register(insertLinesTool);
+    registry.register(deleteLinesTool);
     registry.register(grepSearchTool);
     registry.register(listDirTool);
     registry.register(runCommandTool);
 
     return registry;
 }
+

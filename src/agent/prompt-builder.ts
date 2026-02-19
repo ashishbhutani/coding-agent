@@ -31,7 +31,13 @@ All relative paths are resolved relative to this directory.
 
 ### File Operations
 - Use \`read_file\` to examine files before editing them
-- Use \`write_file\` to create or overwrite files — always write the COMPLETE file content
+- Use \`edit_file\` to modify existing files — ALWAYS prefer this over \`write_file\` for edits:
+  - **Search & replace mode** (preferred): provide \`old_text\` and \`new_text\` — the old text must match exactly once
+  - **Line range mode**: provide \`start_line\`, \`end_line\`, and \`new_text\`
+  - Always \`read_file\` first to get the exact text you want to replace
+- Use \`insert_lines\` to add new content without replacing anything (line=0 for start, -1 for end)
+- Use \`delete_lines\` to remove a range of lines
+- Use \`write_file\` ONLY for creating new files or complete rewrites
 - Use \`grep_search\` to find patterns across the codebase
 - Use \`list_dir\` to explore directory structure
 
