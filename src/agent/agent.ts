@@ -17,18 +17,22 @@
 import type { LLMProvider, LLMMessage, ToolResult } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { buildSystemPrompt } from "./prompt-builder.js";
+import { CostTracker } from "./cost-tracker.js";
 import chalk from "chalk";
 
 export interface AgentConfig {
-    maxToolRounds: number; // Max consecutive tool-calling rounds
-    verbose: boolean; // Print tool calls and results
-    maxRepetitions: number; // Max identical consecutive tool calls before stopping
+    maxToolRounds: number;
+    verbose: boolean;
+    maxRepetitions: number;
+    /** Max full-detail tool result rounds to keep in history. Older ones get compressed. */
+    historyWindowSize: number;
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
     maxToolRounds: 25,
     verbose: true,
     maxRepetitions: 2,
+    historyWindowSize: 6,
 };
 
 /** Fingerprint a tool call for repetition detection. */
@@ -42,6 +46,7 @@ export class Agent {
     private conversationHistory: LLMMessage[] = [];
     private config: AgentConfig;
     private systemPrompt: string;
+    private costTracker: CostTracker;
 
     constructor(
         provider: LLMProvider,
@@ -52,6 +57,7 @@ export class Agent {
         this.tools = tools;
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.systemPrompt = buildSystemPrompt(tools.listNames());
+        this.costTracker = new CostTracker(provider.model);
     }
 
     /**
@@ -79,13 +85,19 @@ export class Agent {
                 this.systemPrompt
             );
 
-            // Print usage stats
-            if (response.usage && this.config.verbose) {
-                console.log(
-                    chalk.gray(
-                        `  [tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out]`
-                    )
+            // Record cost
+            if (response.usage) {
+                const entry = this.costTracker.recordUsage(
+                    response.usage.inputTokens,
+                    response.usage.outputTokens
                 );
+                if (this.config.verbose) {
+                    console.log(
+                        chalk.gray(
+                            `  [tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out | call: $${entry.cost.toFixed(4)}]`
+                        )
+                    );
+                }
             }
 
             // If there are tool calls, execute them
@@ -190,6 +202,9 @@ export class Agent {
                     toolResults,
                 });
 
+                // Compress old history to save tokens
+                this.compressHistory();
+
                 continue; // Loop back for the LLM's next response
             }
 
@@ -217,5 +232,62 @@ export class Agent {
      */
     getConversationLength(): number {
         return this.conversationHistory.length;
+    }
+
+    /**
+     * Get a short cost summary (for display after each response).
+     */
+    getCostSummary(): string {
+        return this.costTracker.getShortSummary();
+    }
+
+    /**
+     * Get a detailed cost breakdown (for /cost command).
+     */
+    getCostDetails(): string {
+        return this.costTracker.getDetailedSummary();
+    }
+
+    /**
+     * Reset cost tracking.
+     */
+    resetCost(): void {
+        this.costTracker.reset();
+    }
+
+    /**
+     * Compress old tool results in conversation history to save tokens.
+     * Keeps the last `historyWindowSize` tool result messages in full;
+     * older ones get their outputs truncated.
+     */
+    private compressHistory(): void {
+        const MAX_TRUNCATED_LENGTH = 200;
+
+        // Find all tool-result message indices
+        const toolMsgIndices: number[] = [];
+        for (let i = 0; i < this.conversationHistory.length; i++) {
+            if (this.conversationHistory[i].role === "tool") {
+                toolMsgIndices.push(i);
+            }
+        }
+
+        // Only compress if we exceed the window
+        const excess = toolMsgIndices.length - this.config.historyWindowSize;
+        if (excess <= 0) return;
+
+        // Truncate the oldest tool result messages
+        for (let j = 0; j < excess; j++) {
+            const idx = toolMsgIndices[j];
+            const msg = this.conversationHistory[idx];
+            if (msg.toolResults) {
+                msg.toolResults = msg.toolResults.map((tr) => ({
+                    ...tr,
+                    result:
+                        tr.result.length > MAX_TRUNCATED_LENGTH
+                            ? tr.result.slice(0, MAX_TRUNCATED_LENGTH) + "... (truncated to save tokens)"
+                            : tr.result,
+                }));
+            }
+        }
     }
 }

@@ -49,6 +49,7 @@ function printHelp(): void {
     console.log(chalk.gray("  /help     — Show this help"));
     console.log(chalk.gray("  /clear    — Clear conversation history"));
     console.log(chalk.gray("  /tools    — List available tools"));
+    console.log(chalk.gray("  /cost     — Show session cost breakdown"));
     console.log(chalk.gray("  /exit     — Exit the agent"));
     console.log(chalk.gray("  /verbose  — Toggle verbose mode"));
     console.log();
@@ -140,10 +141,20 @@ async function main(): Promise<void> {
 
         if (trimmed === "/verbose") {
             verbose = !verbose;
-            // Create new agent with updated config (keeping conversation)
             console.log(
                 chalk.green(`  Verbose mode: ${verbose ? "ON" : "OFF"}`)
             );
+            continue;
+        }
+
+        if (trimmed === "/cost reset") {
+            agent.resetCost();
+            console.log(chalk.green("  ✅ Cost tracking reset."));
+            continue;
+        }
+
+        if (trimmed === "/cost") {
+            console.log(chalk.yellow(`\n${agent.getCostDetails()}`));
             continue;
         }
 
@@ -153,6 +164,7 @@ async function main(): Promise<void> {
             const response = await agent.processMessage(input);
             console.log(chalk.bold.green("\n🤖 Agent:"));
             console.log(response);
+            console.log(chalk.gray(`\n  💰 ${agent.getCostSummary()}`));
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : String(error);
             console.error(chalk.red(`\n  ❌ Error: ${msg}`));
