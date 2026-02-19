@@ -139,6 +139,36 @@ export class GeminiProvider implements LLMProvider {
 
             const hasToolCalls = toolCalls.length > 0;
 
+            // Debug: dump raw model response when DEBUG_RESPONSE=1
+            if (process.env.DEBUG_RESPONSE === "1") {
+                console.log("\n" + "─".repeat(80));
+                console.log("📤 DEBUG: MODEL RESPONSE");
+                console.log("─".repeat(80));
+
+                if (textContent) {
+                    console.log("\n── Text ──");
+                    console.log(textContent);
+                }
+
+                if (toolCalls.length > 0) {
+                    console.log("\n── Tool Calls ──");
+                    for (const tc of toolCalls) {
+                        console.log(`  → ${tc.name}(${JSON.stringify(tc.arguments, null, 2)})`);
+                    }
+                }
+
+                if (response.usageMetadata) {
+                    console.log("\n── Usage ──");
+                    console.log(`  Input:  ${response.usageMetadata.promptTokenCount} tokens`);
+                    console.log(`  Output: ${response.usageMetadata.candidatesTokenCount} tokens`);
+                    if (response.usageMetadata.totalTokenCount) {
+                        console.log(`  Total:  ${response.usageMetadata.totalTokenCount} tokens`);
+                    }
+                }
+
+                console.log("\n" + "─".repeat(80) + "\n");
+            }
+
             return {
                 content: textContent,
                 toolCalls,
