@@ -3,18 +3,21 @@
  *
  * Creates or overwrites a file with the given content.
  * Creates parent directories if they don't exist.
+ * Blocks overwriting protected project config files.
  */
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
+import { isProtectedPath } from "./safety.js";
 
 export const writeFileTool: Tool = {
     definition: {
         name: "write_file",
         description:
             "Write content to a file. Creates the file if it doesn't exist, " +
-            "or overwrites it if it does. Parent directories are created automatically.",
+            "or overwrites it if it does. Parent directories are created automatically. " +
+            "NOTE: Cannot overwrite protected config files (package.json, tsconfig.json, etc.) — use edit_file instead.",
         parameters: {
             type: "object",
             properties: {
@@ -35,6 +38,14 @@ export const writeFileTool: Tool = {
         const filePath = resolve(String(args.path));
         const content = String(args.content);
 
+        // Safety: block overwriting protected files
+        if (isProtectedPath(filePath)) {
+            return {
+                output: `Blocked: "${filePath}" is a protected project file. Use edit_file to make changes instead of overwriting.`,
+                isError: true,
+            };
+        }
+
         try {
             // Ensure parent directory exists
             await mkdir(dirname(filePath), { recursive: true });
@@ -51,3 +62,4 @@ export const writeFileTool: Tool = {
         }
     },
 };
+

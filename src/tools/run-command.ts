@@ -8,6 +8,7 @@
 import { exec } from "node:child_process";
 import { resolve } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
+import { isDangerousCommand } from "./safety.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 const MAX_OUTPUT_LENGTH = 50_000; // 50KB output cap
@@ -44,6 +45,12 @@ export const runCommandTool: Tool = {
         const command = String(args.command);
         const cwd = resolve(String(args.cwd || "."));
         const timeout = Number(args.timeout_ms || DEFAULT_TIMEOUT_MS);
+
+        // Safety: block dangerous commands
+        const danger = isDangerousCommand(command);
+        if (danger) {
+            return { output: danger, isError: true };
+        }
 
         return new Promise((resolvePromise) => {
             exec(
