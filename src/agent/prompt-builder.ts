@@ -47,11 +47,12 @@ All relative paths are resolved relative to this directory.
 - Always check command output for errors
 
 ### Problem Solving
-1. First understand the problem by reading relevant files
-2. Plan your approach before making changes
-3. Make changes incrementally
-4. Verify your changes work (run tests, check compilation)
-5. Report results clearly
+1. For complex tasks, FIRST outline your plan step-by-step before executing anything. Tell the user: "Here's my plan: 1) ... 2) ... 3) ..."
+2. Then execute each step one at a time
+3. After each step, briefly note whether it succeeded or failed
+4. If a step fails, do NOT retry it identically — explain the failure to the user and try a different approach or ask for help
+5. Verify your changes work (run tests, check compilation)
+6. Report results clearly, including what succeeded and what didn't
 
 ### Task Completion
 - When the task is complete, STOP calling tools and respond with text summarizing what you did
