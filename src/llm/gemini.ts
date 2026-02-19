@@ -75,6 +75,43 @@ export class GeminiProvider implements LLMProvider {
         // Convert our messages to Gemini format
         const contents = this.convertMessages(messages);
 
+        // Debug: dump full prompt payload when DEBUG_PROMPTS=1
+        if (process.env.DEBUG_PROMPTS === "1") {
+            console.log("\n" + "═".repeat(80));
+            console.log("🔍 DEBUG: PROMPT SENT TO MODEL");
+            console.log("═".repeat(80));
+
+            if (systemPrompt) {
+                console.log("\n── System Prompt ──");
+                console.log(systemPrompt);
+            }
+
+            console.log("\n── Messages ──");
+            for (const c of contents) {
+                console.log(`\n[${c.role}]`);
+                for (const part of c.parts) {
+                    if ('text' in part) {
+                        console.log(part.text);
+                    } else if ('functionCall' in part) {
+                        const fc = part.functionCall as { name: string; args: unknown };
+                        console.log(`  → call: ${fc.name}(${JSON.stringify(fc.args)})`);
+                    } else if ('functionResponse' in part) {
+                        const fr = part.functionResponse as { name: string; response: unknown };
+                        console.log(`  ← result: ${fr.name} → ${JSON.stringify(fr.response)}`);
+                    }
+                }
+            }
+
+            if (tools?.length) {
+                console.log("\n── Tool Definitions ──");
+                for (const t of tools) {
+                    console.log(`  • ${t.name}: ${t.description?.slice(0, 100)}`);
+                }
+            }
+
+            console.log("\n" + "═".repeat(80) + "\n");
+        }
+
         try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const result = await generativeModel.generateContent({ contents } as any);
