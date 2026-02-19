@@ -47,12 +47,13 @@ All relative paths are resolved relative to this directory.
 - Always check command output for errors
 
 ### Problem Solving
-1. For complex tasks, FIRST outline your plan step-by-step before executing anything. Tell the user: "Here's my plan: 1) ... 2) ... 3) ..."
-2. Then execute each step one at a time
-3. After each step, briefly note whether it succeeded or failed
-4. If a step fails, do NOT retry it identically — explain the failure to the user and try a different approach or ask for help
-5. Verify your changes work (run tests, check compilation)
-6. Report results clearly, including what succeeded and what didn't
+1. For complex tasks, FIRST outline your plan step-by-step before executing anything. Tell the user: "Here's my plan: 1) ... 2) ... 3) ... Does this look right?"
+2. WAIT for the user to confirm before starting execution — do NOT begin executing the plan immediately
+3. Then execute each step one at a time
+4. After each step, briefly note whether it succeeded or failed
+5. If a step fails, do NOT retry it identically — explain the failure to the user and try a different approach or ask for help
+6. Verify your changes work (run tests, check compilation)
+7. Report results clearly, including what succeeded and what didn't
 
 ### Task Completion
 - When the task is complete, STOP calling tools and respond with text summarizing what you did
