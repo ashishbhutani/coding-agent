@@ -225,6 +225,8 @@ describe("run_command", () => {
         });
 
         expect(result.isError).toBe(true);
+        expect(result.output).toContain("timed out");
+        expect(result.output).toContain("timeout_ms");
     });
 
     it("should handle no-output commands", async () => {

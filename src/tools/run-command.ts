@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import type { Tool, ToolExecutionResult } from "./registry.js";
 import { checkCommandSafety } from "./safety.js";
 
-const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
+const DEFAULT_TIMEOUT_MS = 120_000; // 120 seconds
 const MAX_OUTPUT_LENGTH = 50_000; // 50KB output cap
 
 export const runCommandTool: Tool = {
@@ -18,7 +18,8 @@ export const runCommandTool: Tool = {
         name: "run_command",
         description:
             "Execute a shell command and return the output (stdout and stderr). " +
-            "Has a 30-second timeout by default. Use for running tests, builds, git commands, etc. " +
+            "Has a 120-second timeout by default. For long builds (mvn, gradle, npm install), " +
+            "set timeout_ms to 300000 (5 min) or higher. " +
             "Destructive commands (rm, unlink, etc.) will require user confirmation.",
         parameters: {
             type: "object",
@@ -34,7 +35,7 @@ export const runCommandTool: Tool = {
                 },
                 timeout_ms: {
                     type: "integer",
-                    description: "Timeout in milliseconds (default: 30000)",
+                    description: "Timeout in milliseconds (default: 120000). Use 300000+ for builds.",
                 },
             },
             required: ["command"],
@@ -80,11 +81,23 @@ export const runCommandTool: Tool = {
 
                     if (error) {
                         const exitCode = error.code ?? "unknown";
-                        resolvePromise({
-                            output:
-                                `Command failed (exit code: ${exitCode}):\n${output}`.trim(),
-                            isError: true,
-                        });
+                        const isTimeout = error.killed || exitCode === 143 || exitCode === "SIGTERM";
+
+                        if (isTimeout) {
+                            resolvePromise({
+                                output:
+                                    `Command timed out after ${timeout / 1000}s. ` +
+                                    `Partial output:\n${output}\n\n` +
+                                    `💡 Tip: Retry with a higher timeout_ms (e.g. 300000 for 5 min).`.trim(),
+                                isError: true,
+                            });
+                        } else {
+                            resolvePromise({
+                                output:
+                                    `Command failed (exit code: ${exitCode}):\n${output}`.trim(),
+                                isError: true,
+                            });
+                        }
                     } else {
                         resolvePromise({
                             output:
