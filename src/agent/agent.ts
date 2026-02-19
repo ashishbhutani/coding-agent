@@ -16,6 +16,7 @@
 
 import type { LLMProvider, LLMMessage, ToolResult } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import type { Summarizer } from "./summarizer.js";
 import { buildSystemPrompt } from "./prompt-builder.js";
 import { CostTracker } from "./cost-tracker.js";
 import chalk from "chalk";
@@ -47,17 +48,20 @@ export class Agent {
     private config: AgentConfig;
     private systemPrompt: string;
     private costTracker: CostTracker;
+    private summarizer?: Summarizer;
 
     constructor(
         provider: LLMProvider,
         tools: ToolRegistry,
-        config?: Partial<AgentConfig>
+        config?: Partial<AgentConfig>,
+        summarizer?: Summarizer
     ) {
         this.provider = provider;
         this.tools = tools;
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.systemPrompt = buildSystemPrompt(tools.listNames());
         this.costTracker = new CostTracker(provider.model);
+        this.summarizer = summarizer;
     }
 
     /**
@@ -203,7 +207,7 @@ export class Agent {
                 });
 
                 // Compress old history to save tokens
-                this.compressHistory();
+                await this.compressHistory();
 
                 continue; // Loop back for the LLM's next response
             }
@@ -256,13 +260,11 @@ export class Agent {
     }
 
     /**
-     * Compress old tool results in conversation history to save tokens.
-     * Keeps the last `historyWindowSize` tool result messages in full;
-     * older ones get their outputs truncated.
+     * Compress old conversation history to save tokens.
+     * Uses LLM summarization if a Summarizer is available;
+     * falls back to simple truncation otherwise.
      */
-    private compressHistory(): void {
-        const MAX_TRUNCATED_LENGTH = 200;
-
+    private async compressHistory(): Promise<void> {
         // Find all tool-result message indices
         const toolMsgIndices: number[] = [];
         for (let i = 0; i < this.conversationHistory.length; i++) {
@@ -275,7 +277,44 @@ export class Agent {
         const excess = toolMsgIndices.length - this.config.historyWindowSize;
         if (excess <= 0) return;
 
-        // Truncate the oldest tool result messages
+        // Determine the range of messages to compress:
+        // from the start up to (and including) the last excess tool message
+        const lastExcessToolIdx = toolMsgIndices[excess - 1];
+        // Include one message after the last tool result (the next assistant/user)
+        const cutoffIdx = Math.min(lastExcessToolIdx + 1, this.conversationHistory.length);
+        const oldMessages = this.conversationHistory.slice(0, cutoffIdx);
+
+        if (this.summarizer) {
+            try {
+                const summary = await this.summarizer.summarize(oldMessages);
+
+                if (this.config.verbose) {
+                    console.log(
+                        chalk.gray(`  [compressed ${oldMessages.length} old messages into summary]`)
+                    );
+                }
+
+                // Replace old messages with a single context message
+                this.conversationHistory = [
+                    {
+                        role: "user",
+                        content: `[Context from earlier in this conversation: ${summary}]`,
+                    },
+                    ...this.conversationHistory.slice(cutoffIdx),
+                ];
+                return;
+            } catch {
+                // Fall through to truncation if summarization fails
+                if (this.config.verbose) {
+                    console.log(
+                        chalk.yellow(`  [summarization failed, falling back to truncation]`)
+                    );
+                }
+            }
+        }
+
+        // Fallback: simple truncation of old tool results
+        const MAX_TRUNCATED_LENGTH = 200;
         for (let j = 0; j < excess; j++) {
             const idx = toolMsgIndices[j];
             const msg = this.conversationHistory[idx];
