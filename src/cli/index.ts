@@ -15,6 +15,7 @@ import { Summarizer } from "../agent/summarizer.js";
 import { createToolRegistry } from "../tools/index.js";
 import { createProvider } from "../llm/index.js";
 import { setConfirmationHandler } from "../tools/confirmation.js";
+import { execFile } from "node:child_process";
 
 // Load environment variables
 config();
@@ -47,12 +48,15 @@ function printBanner(): void {
 
 function printHelp(): void {
     console.log(chalk.yellow("Commands:"));
-    console.log(chalk.gray("  /help     — Show this help"));
-    console.log(chalk.gray("  /clear    — Clear conversation history"));
-    console.log(chalk.gray("  /tools    — List available tools"));
-    console.log(chalk.gray("  /cost     — Show session cost breakdown"));
-    console.log(chalk.gray("  /exit     — Exit the agent"));
-    console.log(chalk.gray("  /verbose  — Toggle verbose mode"));
+    console.log(chalk.gray("  /help            — Show this help"));
+    console.log(chalk.gray("  /clear           — Clear conversation history"));
+    console.log(chalk.gray("  /tools           — List available tools"));
+    console.log(chalk.gray("  /cost            — Show session cost breakdown"));
+    console.log(chalk.gray("  /cost reset      — Reset cost tracking"));
+    console.log(chalk.gray("  /session         — Show previous session summary"));
+    console.log(chalk.gray("  /session clear   — Delete saved session"));
+    console.log(chalk.gray("  /exit            — Exit the agent"));
+    console.log(chalk.gray("  /verbose         — Toggle verbose mode"));
     console.log();
 }
 
@@ -98,6 +102,35 @@ async function main(): Promise<void> {
     const summarizer = new Summarizer(apiKey);
     const agent = new Agent(provider, tools, { verbose }, summarizer);
 
+    // ── Session restore ──────────────────────────────────────────────────────
+    const session = await agent.sessionStore.load();
+    if (session) {
+        // Verify against current git state
+        const gitLog = await new Promise<string>((resolve) => {
+            execFile("git", ["log", "--oneline", "-5"], (err, stdout) =>
+                resolve(err ? "(no git history)" : stdout.trim())
+            );
+        });
+
+        agent.injectSessionContext(session.summary, session.timestamp, gitLog);
+
+        console.log(
+            chalk.cyan(
+                `\n  📂 Previous session restored (${new Date(session.timestamp).toLocaleString()})`
+            )
+        );
+        console.log(chalk.gray(`     ${session.summary.slice(0, 120)}...`));
+        console.log();
+    }
+
+    // ── SIGINT (Ctrl+C) — save session before exiting ───────────────────────
+    process.on("SIGINT", async () => {
+        console.log(chalk.gray("\n\n  💾 Saving session..."));
+        await agent.saveSession();
+        console.log(chalk.gray("  👋 Goodbye!\n"));
+        process.exit(0);
+    });
+
     console.log(
         chalk.green("  ✅ Agent ready. Type your request or /help for commands.\n")
     );
@@ -114,7 +147,9 @@ async function main(): Promise<void> {
 
         // Handle commands
         if (trimmed === "/exit" || trimmed === "/quit") {
-            console.log(chalk.gray("\n👋 Goodbye!\n"));
+            console.log(chalk.gray("\n  💾 Saving session..."));
+            await agent.saveSession();
+            console.log(chalk.gray("  👋 Goodbye!\n"));
             break;
         }
 
@@ -157,6 +192,25 @@ async function main(): Promise<void> {
 
         if (trimmed === "/cost") {
             console.log(chalk.yellow(`\n${agent.getCostDetails()}`));
+            continue;
+        }
+
+        if (trimmed === "/session clear") {
+            await agent.sessionStore.clear();
+            console.log(chalk.green("  ✅ Session cleared."));
+            continue;
+        }
+
+        if (trimmed === "/session") {
+            const s = await agent.sessionStore.load();
+            if (!s) {
+                console.log(chalk.gray("  No saved session found."));
+            } else {
+                console.log(chalk.yellow(`\n  📂 Last session: ${new Date(s.timestamp).toLocaleString()}`));
+                console.log(chalk.gray(`  Working dir: ${s.workingDir}`));
+                console.log(chalk.gray(`  Git commit:  ${s.gitCommit ?? "unknown"}`));
+                console.log(chalk.gray(`  Summary:\n    ${s.summary}`));
+            }
             continue;
         }
 
