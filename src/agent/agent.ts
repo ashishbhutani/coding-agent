@@ -19,7 +19,9 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type { Summarizer } from "./summarizer.js";
 import { buildSystemPrompt } from "./prompt-builder.js";
 import { CostTracker } from "./cost-tracker.js";
+import { SessionStore } from "./session-store.js";
 import chalk from "chalk";
+import { execFile } from "node:child_process";
 
 export interface AgentConfig {
     maxToolRounds: number;
@@ -49,6 +51,7 @@ export class Agent {
     private systemPrompt: string;
     private costTracker: CostTracker;
     private summarizer?: Summarizer;
+    readonly sessionStore: SessionStore;
 
     constructor(
         provider: LLMProvider,
@@ -62,6 +65,7 @@ export class Agent {
         this.systemPrompt = buildSystemPrompt(tools.listNames());
         this.costTracker = new CostTracker(provider.model);
         this.summarizer = summarizer;
+        this.sessionStore = new SessionStore();
     }
 
     /**
@@ -229,6 +233,87 @@ export class Agent {
      */
     resetConversation(): void {
         this.conversationHistory = [];
+    }
+
+    /**
+     * Get conversation history (for summarization / session save).
+     */
+    getHistory(): LLMMessage[] {
+        return this.conversationHistory;
+    }
+
+    /**
+     * Get the last user message from history (for session metadata).
+     */
+    getLastUserMessage(): string {
+        for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
+            const msg = this.conversationHistory[i];
+            if (msg.role === "user" && !msg.content.startsWith("[Context from") && !msg.content.startsWith("[SYSTEM]") && !msg.content.startsWith("[Resuming from")) {
+                return msg.content;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Save session state to .agent-session.json.
+     * Uses summarizer if available; falls back to a short truncation.
+     */
+    async saveSession(): Promise<void> {
+        if (this.conversationHistory.length === 0) return;
+
+        let summary: string;
+        if (this.summarizer) {
+            try {
+                summary = await this.summarizer.summarize(this.conversationHistory);
+            } catch {
+                summary = this.conversationHistory
+                    .filter((m) => m.role === "user")
+                    .map((m) => m.content.slice(0, 100))
+                    .join(" | ")
+                    .slice(0, 500);
+            }
+        } else {
+            summary = this.conversationHistory
+                .filter((m) => m.role === "user")
+                .map((m) => m.content.slice(0, 100))
+                .join(" | ")
+                .slice(0, 500);
+        }
+
+        const gitCommit = await this.getGitCommit();
+
+        await this.sessionStore.save({
+            workingDir: process.cwd(),
+            gitCommit,
+            summary,
+            lastUserMessage: this.getLastUserMessage(),
+        });
+
+        if (this.config.verbose) {
+            console.log(chalk.gray(`  [session saved to ${this.sessionStore.getFilePath()}]`));
+        }
+    }
+
+    /**
+     * Inject a previous session summary as context at the start of history.
+     */
+    injectSessionContext(summary: string, timestamp: string, gitLog: string): void {
+        this.conversationHistory.unshift({
+            role: "user",
+            content:
+                `[Resuming from previous session — ${timestamp}]\n` +
+                `Summary: ${summary}\n` +
+                `Git state:\n${gitLog}`,
+        });
+    }
+
+    private getGitCommit(): Promise<string | null> {
+        return new Promise((resolve) => {
+            execFile("git", ["rev-parse", "--short", "HEAD"], (err, stdout) => {
+                resolve(err ? null : stdout.trim());
+            });
+        });
     }
 
     /**
